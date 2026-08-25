@@ -1,0 +1,39 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Debug backend (uvicorn)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "uvicorn",
+      "args": ["app.main:app", "--port", "8000"],
+      "cwd": "${workspaceFolder}/backend",
+      "python": "${workspaceFolder}/backend/menv/bin/python",
+      "justMyCode": true,
+      "console": "integratedTerminal"
+    },
+    {
+      "name": "Debug backend (uvicorn, DEBUG logs)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "uvicorn",
+      "args": ["app.main:app", "--port", "8000"],
+      "cwd": "${workspaceFolder}/backend",
+      "python": "${workspaceFolder}/backend/menv/bin/python",
+      "justMyCode": true,
+      "console": "integratedTerminal",
+      "env": { "LOG_LEVEL": "DEBUG" }
+    },
+    {
+      "name": "Debug pytest (backend)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "pytest",
+      "args": ["-v", "-s"],
+      "cwd": "${workspaceFolder}/backend",
+      "python": "${workspaceFolder}/backend/menv/bin/python",
+      "justMyCode": true,
+      "console": "integratedTerminal"
+    }
+  ]
+}
