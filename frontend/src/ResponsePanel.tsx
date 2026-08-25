@@ -1,4 +1,5 @@
 import { ConfidenceBadge } from "./ConfidenceBadge";
+import { API_BASE_URL } from "./api/client";
 import type { QueryResponse } from "./api/types";
 
 interface ResponsePanelProps {
@@ -16,7 +17,7 @@ export function ResponsePanel({ response }: ResponsePanelProps) {
       <footer className="response-panel__footer">
         trace_id:{" "}
         <a
-          href={`/api/v1/traces/${response.trace_id}`}
+          href={`${API_BASE_URL}/api/v1/traces/${response.trace_id}`}
           target="_blank"
           rel="noreferrer"
           className="response-panel__trace-link"

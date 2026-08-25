@@ -1,146 +1,132 @@
 # createdev
-# Design NL Query Assistant
 
-## 1. Problem Statement
-User should be able to talk through the data using AI Chat Interface with the query given by user. Understand the intent from the query, pass that intent and extract specific template and finally extract parameters and fill those in extracted template to run against the database and return the rows to NL Agent to give final output user can understand
+A natural-language query assistant over a hiring database. Ask a question in plain English; a
+two-node LangGraph pipeline classifies it into a curated SQL template, fills the parameters,
+executes it read-only, and answers grounded in the real rows — or asks you to clarify if it isn't
+confident enough. See [docs/design.MD](docs/design.MD) for the full design.
 
-## 2. Out of Scope
-RAG, Auth
+## Interact with the app
 
-## 3. Agent Flow
-Uses a Plan Execute Graph Structure where one Agents output is an input for another Agent
+Once it's running (see [Run it locally](#run-it-locally-end-to-end) below), open the frontend and
+ask something like:
 
-  a. understand(state) -> {intent, params, confidence}
-  Should take in input as current state(query) and classify the intent on the basis of query. Generate a confidence score: TEMPLATE. If confidence score is less, clarify from user
-  Always generate the typed output
+- `top sources by hires in 2025`
+- `average time to hire in Engineering in 2025`
+- `interview pass rate for Senior Backend Engineer`
+- `how are we doing` — deliberately vague; should come back asking you to clarify instead of
+  guessing
+- `time to hire in Enginering` — a typo'd department name; may clarify either via the confidence
+  gate or by listing the real department names, depending on how confident the model is
 
-  b. process(state):
-  Looks the template sql by intent. Bind the params and, executes read-only with LIMIT mid model summarizes the returned rows, grounded in them.
+Or call the API directly:
 
-
-  The model never writes SQL. It picks the intent and fills typed slots. There is no guess fallback: below threshold the user gets a question. 
-
-## 4.Open questions for architect
-  Do you think we should include multiple tenants or keep it for single tenant?
-
-## 5. Data model
-Postgres, single tenant (pending §4). All ids `UUID DEFAULT gen_random_uuid()`, all times `TIMESTAMPTZ`.
-
-**query_templates** — the only place SQL exists. Seeded/curated, never written by the model.
-
-| column | type | notes |
-| --- | --- | --- |
-| id | UUID PK | |
-| intent | TEXT UNIQUE NOT NULL | the key `understand()` returns |
-| description | TEXT NOT NULL | fed to the classifier prompt; this is what intent matching reads |
-| sql_text | TEXT NOT NULL | named binds only (`:since`, `:status`); no string interpolation, no LIMIT |
-| params_schema | JSONB NOT NULL | JSON Schema for the typed slots; drives param extraction + validation |
-| enabled | BOOLEAN NOT NULL DEFAULT true | soft-disable without deleting |
-| created_at | TIMESTAMPTZ NOT NULL DEFAULT now() | |
-
-`params_schema` is hand-authored, not derived: SQL carries bind *names* only, while slot filling
-needs types, formats, enums and descriptions. The two must agree — see the §8 invariant.
-
-Row count is not a template concern. The executor appends a single global `MAX_ROWS` cap from
-config, so the model has no say in it and cannot be prompted into one.
-
-**audit_trail** — one row per `/v1/query` call, written on every route including failures.
-
-| column | type | notes |
-| --- | --- | --- |
-| id | UUID PK | |
-| trace_id | UUID NOT NULL | indexed; the §7 correlation id |
-| question | TEXT NOT NULL | verbatim user input |
-| answer | TEXT NULL | NULL when route ≠ 'answer' |
-| intent | TEXT NULL REFERENCES query_templates(intent) | NULL when nothing cleared threshold |
-| params | JSONB NOT NULL DEFAULT '{}' | post-validation, as bound |
-| confidence | NUMERIC(4,3) NOT NULL | 0.000–1.000 |
-| route | TEXT NOT NULL | CHECK IN ('answer','clarified','error') |
-| row_count | INTEGER NULL | rows the template returned |
-| latency_ms | INTEGER NOT NULL | end-to-end |
-| created_at | TIMESTAMPTZ NOT NULL DEFAULT now() | indexed |
-
-**llm_usage** — one row per node invocation, not per request.
-
-| column | type | notes |
-| --- | --- | --- |
-| id | UUID PK | |
-| trace_id | UUID NOT NULL | indexed; joins to audit_trail |
-| node | TEXT NOT NULL | CHECK IN ('understand','respond') |
-| model | TEXT NOT NULL | resolved model id, not the tier name |
-| prompt_tokens | INTEGER NOT NULL | |
-| completion_tokens | INTEGER NOT NULL | |
-| latency_ms | INTEGER NOT NULL | |
-| created_at | TIMESTAMPTZ NOT NULL DEFAULT now() | |
-
-**Deliberately excluded:** returned rows (PII — summarize, don't retain), `cost` (derive from
-model+tokens at read time), `user_id` (auth out of scope), embedding columns (RAG out of scope),
-`tenant_id` (blocked on §4).
-
-## 6. API Design
-JSON in, JSON out, on every endpoint. `trace_id` is echoed on every response including errors.
-
-**POST /v1/query** — `{"question": string, "trace_id": uuid|null}`
-
-200, route=answer:
-```json
-{"trace_id":"uuid","route":"answer","answer":"string","intent":"string",
- "params":{},"confidence":0.93,"row_count":12,"latency_ms":840}
-```
-200, route=clarified (below threshold — a question, never a guess):
-```json
-{"trace_id":"uuid","route":"clarified","clarifying_question":"string",
- "confidence":0.41,"candidate_intents":["string"],"latency_ms":310}
-```
-422 (bad body) / 500 (node or SQL failure):
-```json
-{"trace_id":"uuid","route":"error","error":{"code":"string","message":"string"}}
+```bash
+curl -s -X POST http://localhost:8000/api/v1/query \
+  -H 'content-type: application/json' \
+  -d '{"question":"top sources by hires in 2025"}' | python3 -m json.tool
 ```
 
-**GET /v1/traces/{trace_id}** — audit row plus its usage rows, for the §7 UI hop.
-```json
-{"trace_id":"uuid","question":"string","answer":"string|null","intent":"string|null",
- "params":{},"confidence":0.93,"route":"answer","row_count":12,"latency_ms":840,
- "created_at":"2026-08-20T00:00:00Z",
- "usage":[{"node":"understand","model":"string","prompt_tokens":0,
-           "completion_tokens":0,"latency_ms":0}]}
-```
-404: `{"error":{"code":"trace_not_found","message":"string"}}`
+Every response carries a `trace_id`. Look up what actually happened for one call — which nodes
+ran, what each cost, how long each took:
 
-**GET /v1/templates** — what the assistant can actually answer; drives UI affordances.
-```json
-{"templates":[{"intent":"string","description":"string","params_schema":{}}]}
+```bash
+curl -s http://localhost:8000/api/v1/traces/<trace_id> | python3 -m json.tool
 ```
 
-**GET /health** — `{"status":"ok","db":"ok","version":"string"}`
+Or see aggregate spend over a time window (default 24h):
 
-## 7. Observability
-One `trace_id` per request: minted by the UI if absent, else server-side, returned in the body and
-in an `X-Trace-Id` header, persisted on `audit_trail` and every `llm_usage` row.
+```bash
+curl -s "http://localhost:8000/api/v1/admin/cost?hours=24" | python3 -m json.tool
+```
 
-structlog JSON to stdout, `trace_id` bound once at request entry and inherited by both nodes. Each
-node emits enter/exit: `understand` logs `{intent, confidence, params, model, tokens, latency_ms}`;
-`process` logs `{intent, bound_params, row_count, sql_latency_ms, model, tokens, latency_ms}`.
-Never log returned rows — count only, matching §5's exclusion.
+## Run it locally (end to end)
 
-## 8. Evaluation
-A golden set of `(question → expected intent, expected params)` cases stored as fixtures, run under
-pytest/pytest-asyncio with the LLM stubbed for unit runs and live for a nightly eval run.
+Prerequisites: Docker, Python 3.10 (pinned — see [docs/versions.md](docs/versions.md)), Node 18+,
+and an OpenAI API key with access to whatever models you configure below.
 
-Metrics per run: intent accuracy, param exact-match rate, clarify rate (should be high on
-deliberately ambiguous cases, near zero on clear ones), false-answer rate (wrong intent answered
-confidently — the metric that matters most), p50/p95 latency, tokens per query.
+**1. Start Postgres**
 
-Invariant tests, independent of model quality:
-- the model never emits SQL; every executed statement came from `query_templates`
-- every execution is read-only and capped at `MAX_ROWS`
-- per template, the bind names parsed from `sql_text` exactly equal the property names in
-  `params_schema` — catches drift at review time instead of at query time
+```bash
+docker compose up -d
+```
 
-## 9. Model Routing
-`understand` → cheap tier: classification into a fixed intent set with a typed schema, no prose.
-`respond` → mid tier: grounded summarization of returned rows, where fluency shows.
+**2. Backend**
 
-Tier→model mapping lives in config, not in code, so it moves without a deploy. The resolved model
-id is written to `llm_usage.model` so a routing change is visible in cost data. Pinned SDK versions
-per `docs/versions.md`.
+```bash
+cd backend
+python3 -m venv menv
+source menv/bin/activate
+pip install -r requirements.txt
+
+cp .env.example .env
+# Edit .env and fill in at least:
+#   DATABASE_URL       postgresql+asyncpg://app:app@localhost:5432/hiretoday  (matches compose.yaml)
+#   OPENAI_API_KEY      your key
+#   MODEL_UNDERSTAND    a model your key has access to, e.g. gpt-4o-mini
+#   MODEL_RESPOND       a model your key has access to, e.g. gpt-4o-mini
+#   CONFIDENCE_THRESHOLD  e.g. 0.75
+#   MAX_ROWS            e.g. 30
+
+alembic upgrade head
+python -m app.scripts.seed_sample_data
+python -m app.scripts.seed_query_templates
+
+uvicorn app.main:app --reload --port 8000
+```
+
+Confirm it's up: `curl http://localhost:8000/healthz` should return `{"status":"ok"}`.
+
+**3. Frontend**
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+Open the URL Vite prints (typically `http://localhost:5173`). In dev, requests to `/api/*` are
+proxied to `http://localhost:8000` automatically — no extra config needed.
+
+## Deploying
+
+### Frontend on Vercel
+
+`frontend/vercel.json` is already set up (framework `vite`, build command, output directory). To
+deploy:
+
+1. Import the repo into Vercel, and set the project's **Root Directory** to `frontend`.
+2. Set the **`VITE_API_BASE_URL`** environment variable to your hosted backend's URL (no trailing
+   slash) — see [frontend/.env.example](frontend/.env.example). Locally this is left blank so
+   requests stay relative and go through the Vite dev proxy; in production there's no dev proxy,
+   so the frontend needs an absolute backend URL baked in at build time.
+3. Deploy.
+
+### Backend
+
+Vercel runs Python as short-lived serverless functions — that's a mismatch for this backend, which
+holds a pooled async Postgres connection, runs Alembic migrations, and makes LLM calls that can
+take several seconds with retries. Host it somewhere that runs a normal long-lived process instead
+— Railway, Render, and Fly.io are all reasonable fits for a FastAPI + Postgres app; this repo
+doesn't include host-specific config for any of them, so treat the steps below as what any of them
+need, not a tested walkthrough for one in particular:
+
+1. A reachable Postgres instance (the `compose.yaml` one is local-only — most hosts offer a
+   managed Postgres add-on, or use something like Neon/Supabase).
+2. Set the same environment variables as `backend/.env.example` on the host.
+3. Run `alembic upgrade head` and the two seed scripts once against that database (a one-off
+   deploy step or shell session — not something that runs automatically on app startup, by
+   design).
+4. Start the app with `uvicorn app.main:app --host 0.0.0.0 --port $PORT` (or whatever port
+   convention the host expects).
+5. **Set `CORS_ORIGINS`** on the backend to include your Vercel deployment's URL — without this,
+   the browser will block the frontend's requests even though the backend itself is reachable.
+
+## Development
+
+```bash
+cd backend && pytest -v          # unit tests — FakeLLM throughout, no test touches a real provider
+cd frontend && npm run typecheck # TypeScript, no emit
+```
+
+`.vscode/launch.json` has ready-made debug configs for stepping through a live request or a test
+in VS Code.

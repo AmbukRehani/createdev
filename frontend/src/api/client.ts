@@ -1,5 +1,10 @@
 import type { ErrorEnvelope, QueryRequest, QueryResponse } from "./types";
 
+// Empty string in local dev — requests stay relative and go through the
+// Vite dev server's proxy. Set VITE_API_BASE_URL at build time to point a
+// deployed frontend (e.g. on Vercel) at a separately-hosted backend.
+export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "";
+
 export class ApiError extends Error {
   readonly code: string;
   readonly traceId: string | null;
@@ -24,7 +29,7 @@ function isErrorEnvelope(value: unknown): value is ErrorEnvelope {
 }
 
 export async function postQuery(request: QueryRequest): Promise<QueryResponse> {
-  const res = await fetch("/api/v1/query", {
+  const res = await fetch(`${API_BASE_URL}/api/v1/query`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(request),
