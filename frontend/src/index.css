@@ -1,0 +1,135 @@
+:root {
+  color-scheme: light dark;
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  --bg: #ffffff;
+  --fg: #1a1a1a;
+  --muted: #666666;
+  --border: #d9d9d9;
+  --accent: #2563eb;
+  --panel-bg: #f7f7f8;
+  --error-bg: #fdecea;
+  --error-fg: #92140c;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #16181d;
+    --fg: #e8e8e8;
+    --muted: #9a9a9a;
+    --border: #33363c;
+    --accent: #6d9eff;
+    --panel-bg: #1e2126;
+    --error-bg: #3a1f1d;
+    --error-fg: #ff8a80;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+}
+
+.page {
+  max-width: 640px;
+  margin: 0 auto;
+  padding: 2.5rem 1.5rem;
+}
+
+h1 {
+  font-size: 1.4rem;
+  margin-bottom: 1.5rem;
+}
+
+.query-form {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 1.5rem;
+}
+
+.query-form input {
+  flex: 1;
+  padding: 0.6rem 0.8rem;
+  font-size: 1rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--fg);
+}
+
+.query-form button {
+  padding: 0.6rem 1.2rem;
+  font-size: 1rem;
+  border: none;
+  border-radius: 6px;
+  background: var(--accent);
+  color: #ffffff;
+  cursor: pointer;
+}
+
+.query-form button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.response-panel {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 1rem 1.25rem;
+  background: var(--panel-bg);
+}
+
+.response-panel--error {
+  background: var(--error-bg);
+  color: var(--error-fg);
+  border-color: var(--error-fg);
+}
+
+.response-panel__body {
+  margin: 0 0 0.75rem;
+  line-height: 1.5;
+}
+
+.response-panel__footer {
+  margin-top: 0.75rem;
+  font-size: 0.8rem;
+  color: var(--muted);
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+}
+
+.response-panel__trace-link {
+  color: inherit;
+  text-decoration: underline dotted;
+}
+
+.response-panel__trace-link:hover {
+  color: var(--accent);
+  text-decoration-style: solid;
+}
+
+.confidence-badge {
+  display: inline-block;
+  padding: 0.2rem 0.6rem;
+  border-radius: 999px;
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.confidence-badge--high {
+  background: #d1f5dd;
+  color: #0f5c31;
+}
+
+.confidence-badge--medium {
+  background: #fdf1c8;
+  color: #7a5b00;
+}
+
+.confidence-badge--low {
+  background: #fde0e0;
+  color: #8a1f1f;
+}

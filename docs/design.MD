@@ -69,12 +69,12 @@ config, so the model has no say in it and cannot be prompted into one.
 | model | TEXT NOT NULL | resolved model id, not the tier name |
 | prompt_tokens | INTEGER NOT NULL | |
 | completion_tokens | INTEGER NOT NULL | |
+| cost_usd | NUMERIC(10,6) NOT NULL DEFAULT 0 | computed once at call time (app/agents/llm.py), stored — not derived at read time |
 | latency_ms | INTEGER NOT NULL | |
 | created_at | TIMESTAMPTZ NOT NULL DEFAULT now() | |
 
-**Deliberately excluded:** returned rows (PII — summarize, don't retain), `cost` (derive from
-model+tokens at read time), `user_id` (auth out of scope), embedding columns (RAG out of scope),
-`tenant_id` (blocked on §4).
+**Deliberately excluded:** returned rows (PII — summarize, don't retain), `user_id` (auth out of
+scope), embedding columns (RAG out of scope), `tenant_id` (blocked on §4).
 
 ## 6. API Design
 JSON in, JSON out, on every endpoint. `trace_id` is echoed on every response including errors.
@@ -96,15 +96,25 @@ JSON in, JSON out, on every endpoint. `trace_id` is echoed on every response inc
 {"trace_id":"uuid","route":"error","error":{"code":"string","message":"string"}}
 ```
 
-**GET /v1/traces/{trace_id}** — audit row plus its usage rows, for the §7 UI hop.
+**GET /api/v1/traces/{trace_id}** — audit row plus its usage rows (`/api/v1/...` prefix; earlier
+examples above predate that convention, not re-normalized here).
 ```json
-{"trace_id":"uuid","question":"string","answer":"string|null","intent":"string|null",
- "params":{},"confidence":0.93,"route":"answer","row_count":12,"latency_ms":840,
- "created_at":"2026-08-20T00:00:00Z",
- "usage":[{"node":"understand","model":"string","prompt_tokens":0,
-           "completion_tokens":0,"latency_ms":0}]}
+{"trace_id":"uuid","question":"string","route":"answer","confidence":0.93,
+ "total_cost_usd":0.0,"total_latency_ms":840,
+ "calls":[{"node":"understand","model":"string","prompt_tokens":0,
+           "completion_tokens":0,"cost_usd":0.0,"latency_ms":0}]}
 ```
-404: `{"error":{"code":"trace_not_found","message":"string"}}`
+`total_latency_ms` = `audit_trail.latency_ms` (whole request, not summed call latencies).
+`total_cost_usd` = `SUM(llm_usage.cost_usd)` for the trace — no stored total exists elsewhere.
+404: `{"trace_id":"uuid","route":"error","error":{"code":"trace_not_found","message":"string"}}`
+
+**GET /api/v1/admin/cost** — aggregate over a window (`?hours=`, default 24).
+```json
+{"window_hours":24,"total_requests":0,"total_cost_usd":0.0,"avg_cost_usd_per_request":0.0,
+ "breakdown":[{"node":"understand","model":"string","calls":0,"cost_usd":0.0}]}
+```
+`total_requests` = `COUNT(DISTINCT trace_id)` over `llm_usage` in the window, so a request that
+failed before any LLM call doesn't count — this is a cost report, deliberately.
 
 **GET /v1/templates** — what the assistant can actually answer; drives UI affordances.
 ```json
@@ -117,10 +127,12 @@ JSON in, JSON out, on every endpoint. `trace_id` is echoed on every response inc
 One `trace_id` per request: minted by the UI if absent, else server-side, returned in the body and
 in an `X-Trace-Id` header, persisted on `audit_trail` and every `llm_usage` row.
 
-structlog JSON to stdout, `trace_id` bound once at request entry and inherited by both nodes. Each
-node emits enter/exit: `understand` logs `{intent, confidence, params, model, tokens, latency_ms}`;
-`process` logs `{intent, bound_params, row_count, sql_latency_ms, model, tokens, latency_ms}`.
-Never log returned rows — count only, matching §5's exclusion.
+structlog JSON to stdout, `trace_id` bound once at entry and inherited by every node. One
+`node_complete` INFO log per node at completion — `{node, intent, confidence, route, row_count,
+model, prompt_tokens, completion_tokens, cost_usd, latency_ms}`, only whichever fields actually
+apply (no model/tokens when no LLM call happened). The conditional edge after `understand` also
+logs `route_decision {decision, confidence, threshold}`. Never log returned rows — count only.
+Question text and generated answers: DEBUG only, never INFO — both are user-derived.
 
 ## 8. Evaluation
 A golden set of `(question → expected intent, expected params)` cases stored as fixtures, run under
